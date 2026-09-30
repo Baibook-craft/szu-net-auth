@@ -1,0 +1,36 @@
+#!/bin/sh
+# opkg postrm —— 文件删除之后调用，参数 $1 = remove | purge | upgrade
+#
+# 到这里 /etc/init.d/szu-netauth 已经不存在了，只能清理残留物。
+
+[ -n "${IPKG_INSTROOT}" ] && exit 0
+
+# 同 postinst：钩子环境下的 PATH 不含 /sbin，重启 rpcd 会找不到命令。
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+
+	case "$1" in
+	remove|purge)
+		# 运行时状态（pid / 状态 json / wake 标志）
+		rm -rf /var/run/szu-netauth 2>/dev/null
+
+		# /etc/szu-netauth/ 里除了包自带的 auth.sh，还可能有运行时数据：
+		#   last_login_ts   上次登录时间戳 —— 纯状态，重装后应重新计时，删掉
+		#   state.log       持久日志（persist_log=1 时才产生）—— 保留，用户可能要查
+		rm -f /etc/szu-netauth/last_login_ts 2>/dev/null
+
+		# rmdir 只在目录为空时才成功 —— 正好用来「顺手收掉空壳、
+		# 但绝不误删用户的日志」。用户的配置 /etc/config/szu-netauth
+		# 由 opkg 按 conffiles 规则询问后处理，这里不碰。
+		rmdir /etc/szu-netauth 2>/dev/null
+
+		# 让 LuCI 菜单立刻消失
+		rm -f  /tmp/luci-indexcache* 2>/dev/null
+		rm -rf /tmp/luci-modulecache  2>/dev/null
+		/etc/init.d/rpcd reload 2>/dev/null
+		;;
+	upgrade)
+		;;
+esac
+
+exit 0

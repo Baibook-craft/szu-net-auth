@@ -1,0 +1,26 @@
+# 统一换行符为 LF。
+#
+# 这条对本项目不是「风格偏好」而是功能性要求：
+#   - shell 脚本若带 CRLF，路由器上的 `#!/bin/sh\r` 会直接报
+#     "not found"，服务起不来
+#   - 打包进 ipk 的 control / postinst 等文件同理
+# 在 Windows 上 clone 或编辑本仓库时，务必让这条生效
+# （git config core.autocrlf 保持默认即可）。
+
+* text=auto eol=lf
+
+*.sh            text eol=lf
+*.js            text eol=lf
+*.json          text eol=lf
+*.md            text eol=lf
+Makefile        text eol=lf
+postinst        text eol=lf
+prerm           text eol=lf
+postrm          text eol=lf
+conffiles       text eol=lf
+control         text eol=lf
+
+# 二进制产物不做任何转换
+*.ipk           binary
+*.ipk.sha256    text eol=lf
+*.png           binary

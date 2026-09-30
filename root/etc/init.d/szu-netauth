@@ -1,0 +1,64 @@
+#!/bin/sh /etc/rc.common
+# SZU campus network auto authentication (procd service)
+START=99
+STOP=10
+USE_PROCD=1
+
+# NOTE: do NOT move the three lines above further down. rpcd's "rc" object only
+# parses roughly the first 580 bytes of an init script. If START/STOP/USE_PROCD
+# sit behind a long header, `ubus call rc list` silently reports no start/stop
+# and LuCI then shows the service as "not enabled". Measured on this device by
+# bisecting the header (see DEPLOY.md). Long notes belong further down.
+
+PROG=/etc/szu-netauth/auth.sh
+STATE_DIR=/var/run/szu-netauth
+
+start_service() {
+	config_load szu-netauth
+	config_get_bool enabled global enabled 1
+
+	if [ "$enabled" -ne 1 ]; then
+		logger -t szu-netauth "配置中 enabled=0（已停用自动认证），本次不启动常驻循环"
+		return 0
+	fi
+
+	if [ ! -x "$PROG" ]; then
+		logger -t szu-netauth "错误：$PROG 不存在或不可执行，服务未启动"
+		return 1
+	fi
+
+	procd_open_instance
+	procd_set_param command "$PROG" --daemon
+	# respawn <fail_threshold> <restart_timeout> <max_fail>
+	#   1 小时窗口内最多重启 10 次，每次间隔 5 秒
+	procd_set_param respawn 3600 5 10
+	# 脚本的 stdout/stderr 进 logd 的内存环形缓冲（logread -e szu-netauth 可查）
+	procd_set_param stdout 1
+	procd_set_param stderr 1
+	procd_close_instance
+}
+
+# ---------------------------------------------------------------------------
+# 配置变更时的处理：**唤醒**常驻循环去重读配置，而不是重启它。
+#
+# 为什么必须显式定义 reload_service：
+#   rc.common 在 USE_PROCD=1 分支里，reload() 的实现是
+#       「若定义了 reload_service 就调用它，否则只再 start 一次」
+#   —— 对已经在运行的常驻服务来说，后者是 no-op（不会重启进程），
+#   于是「改了配置立即生效」这件事其实是失效的。实测确认过。
+#
+# 为什么不直接重启：auth.sh 每轮循环开头都会重新 config_load，
+#   只要把它的分片睡眠打断，新配置最多 5 秒内生效；同时不会掐断
+#   正在进行中的一次登录请求。
+# ---------------------------------------------------------------------------
+reload_service() {
+	logger -t szu-netauth "配置已变更，唤醒常驻循环以应用新配置"
+	touch "$STATE_DIR/wake"
+}
+
+service_triggers() {
+	# 配置变化 → 自动重载（本机 13 处在用这个触发器）
+	procd_add_reload_trigger "szu-netauth"
+	# WAN 口 up/down 等接口事件 → 立刻重新检测，不必死等 sleep 周期
+	procd_add_interface_trigger "interface.*" wan /etc/init.d/szu-netauth reload
+}

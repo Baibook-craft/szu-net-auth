@@ -1,0 +1,40 @@
+#!/bin/sh
+# opkg postinst —— 安装/升级成功后调用，参数 $1 = configure
+#
+# 这里做的是「装完立刻就能用」所必需的事：
+#   1. 清掉 LuCI 的菜单/模块索引缓存，否则新装的页面要等重启才出现
+#   2. 重启 rpcd（它缓存 ACL，reload 不重读 acl.d）
+#   3. 建立运行时目录、设置开机自启
+#
+# IPKG_INSTROOT 非空 = 处于 image builder / 离线刷机环境，宿主的 LuCI 不能动。
+
+[ -n "${IPKG_INSTROOT}" ] && exit 0
+
+# opkg 执行钩子时给的 PATH 不含 /sbin 与 /usr/sbin，而 init.d 脚本内部是靠
+# ubus 去操作 procd 的 —— 缺了这两个目录，start/restart 会「静默失败」：
+# 退出码还是 0，服务却根本没起来。详见 prerm 里的同类说明。
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+
+mkdir -p /var/run/szu-netauth 2>/dev/null
+
+rm -f  /tmp/luci-indexcache* 2>/dev/null
+rm -rf /tmp/luci-modulecache  2>/dev/null
+/etc/init.d/rpcd reload 2>/dev/null
+
+if [ -x /etc/init.d/szu-netauth ]; then
+	/etc/init.d/szu-netauth enable 2>/dev/null
+
+	# 已填过凭据（升级场景 / 二次安装）就直接把服务拉起来；
+	# 全新安装凭据为空时留着手动启动，避免无意义的登录尝试。
+	_cardid="$(uci -q get szu-netauth.global.cardid)"
+	_password="$(uci -q get szu-netauth.global.password)"
+	if [ -n "$_cardid" ] && [ -n "$_password" ]; then
+		/etc/init.d/szu-netauth restart 2>/dev/null
+		logger -t szu-netauth "已安装/升级，服务已启动"
+	else
+		logger -t szu-netauth "已安装。请打开「服务 → 校园网认证」填写卡号与密码"
+	fi
+fi
+
+exit 0

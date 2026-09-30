@@ -1,0 +1,41 @@
+#!/bin/sh
+# =============================================================================
+#  安装后 / 升级后的一次性初始化
+#
+#  这个脚本放在 /etc/uci-defaults/ 下，OpenWrt 在执行成功（exit 0）后会
+#  自动把它删掉；下次升级重新装包时又会回来再跑一遍 —— 正好是我们要的语义：
+#  「每次装上/升级完，都把 LuCI 的缓存刷新一次」。
+#
+#  注意：opkg 在 image builder / 离线刷机环境下会用 IPKG_INSTROOT 指向一个
+#  临时的根文件系统，那时绝不能去动宿主的 LuCI 缓存。
+# =============================================================================
+
+[ -n "${IPKG_INSTROOT}" ] && exit 0
+
+# --- 1. 让 LuCI 重新扫描 menu.d / acl.d，菜单与权限立刻生效 ---
+rm -f  /tmp/luci-indexcache* 2>/dev/null
+rm -rf /tmp/luci-modulecache  2>/dev/null
+
+# rpcd 缓存了 ACL，必须重启它（reload 不重读 acl.d）
+/etc/init.d/rpcd reload 2>/dev/null
+
+# --- 2. 运行时目录（/var 是 tmpfs，重启即清空，所以每次都要建）---
+mkdir -p /var/run/szu-netauth
+
+# --- 3. 开机自启 ---
+if [ -x /etc/init.d/szu-netauth ]; then
+	/etc/init.d/szu-netauth enable 2>/dev/null
+
+	# 只有用户已经填过卡号密码才直接拉起服务；
+	# 全新安装时留空，等用户在 LuCI 里填完再启动（避免无意义的登录尝试）。
+	_cardid="$(uci -q get szu-netauth.global.cardid)"
+	_password="$(uci -q get szu-netauth.global.password)"
+	if [ -n "$_cardid" ] && [ -n "$_password" ]; then
+		/etc/init.d/szu-netauth restart 2>/dev/null
+		logger -t szu-netauth "安装完成，已按现有配置启动自动认证服务"
+	else
+		logger -t szu-netauth "安装完成。请打开「服务 → 校园网认证」，填入卡号与密码后启动服务"
+	fi
+fi
+
+exit 0

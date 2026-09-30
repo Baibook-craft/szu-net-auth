@@ -1,0 +1,78 @@
+name: build-ipk
+
+# 打 v* 标签时自动构建 ipk 并发布到 Release；
+# 平时也可以在 Actions 页面手动触发，产物放在 workflow artifact 里。
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 检查 shell 脚本语法
+        run: |
+          set -e
+          fail=0
+          # 所有会被路由器执行的脚本
+          for f in build-ipk.sh \
+                   root/etc/init.d/szu-netauth \
+                   root/etc/szu-netauth/auth.sh \
+                   root/etc/uci-defaults/50-luci-app-szu-netauth \
+                   ipk/postinst ipk/prerm ipk/postrm ; do
+            if ! sh -n "$f"; then echo "语法错误: $f"; fail=1; fi
+          done
+          bash -n build-ipk.sh
+          exit $fail
+
+      - name: 检查前端 JS 语法
+        run: |
+          set -e
+          for f in root/www/luci-static/resources/view/szu-netauth/*.js ; do
+            node --check "$f"
+          done
+
+      - name: 检查 JSON 合法性
+        run: |
+          set -e
+          for f in $(find root -name '*.json') ; do
+            python3 -c "import json,sys; json.load(open(sys.argv[1]))" "$f"
+          done
+
+      - name: 确认仓库里没有凭据
+        run: |
+          set -e
+          # 默认配置里的卡号/密码必须是空的
+          if grep -E "^\s*option (cardid|password) '[^']+'" root/etc/config/szu-netauth ; then
+            echo "!! root/etc/config/szu-netauth 里似乎有真实凭据，拒绝构建"
+            exit 1
+          fi
+          echo "凭据检查通过"
+
+      - name: 打包
+        run: ./build-ipk.sh
+
+      - name: 自检包体结构
+        run: |
+          python3 tools/make_ipk.py --inspect dist/*.ipk | head -n 20
+
+      - name: 上传 artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: luci-app-szu-netauth-ipk
+          path: dist/*
+
+      - name: 发布到 Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true

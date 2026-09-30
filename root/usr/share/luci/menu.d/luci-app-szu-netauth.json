@@ -1,0 +1,28 @@
+{
+	"admin/services/szu-netauth": {
+		"title": "校园网认证",
+		"order": 70,
+		"action": {
+			"type": "firstchild"
+		},
+		"depends": {
+			"acl": [ "luci-app-szu-netauth" ]
+		}
+	},
+	"admin/services/szu-netauth/overview": {
+		"title": "状态",
+		"order": 10,
+		"action": {
+			"type": "view",
+			"path": "szu-netauth/overview"
+		}
+	},
+	"admin/services/szu-netauth/settings": {
+		"title": "设置",
+		"order": 20,
+		"action": {
+			"type": "view",
+			"path": "szu-netauth/settings"
+		}
+	}
+}

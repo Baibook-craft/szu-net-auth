@@ -1,0 +1,29 @@
+Package: luci-app-szu-netauth
+Version: @@VERSION@@
+Depends: libc, luci-base, rpcd, rpcd-mod-file, curl, jsonfilter
+Source: @@SOURCE_URL@@
+SourceName: luci-app-szu-netauth
+License: MIT
+Section: luci
+Section-Category: LuCI
+Architecture: all
+Installed-Size: @@INSTALLED_SIZE@@
+Description: LuCI app: campus network auto authentication (procd daemon)
+ Automatically (re)logs in to the campus captive portal when the WAN
+ drops, and exposes a LuCI web UI for status, manual trigger and config.
+ .
+ Highlights:
+  - pure shell + procd, no Python/Lua runtime needed at runtime
+  - checks the network every 60 min by default and only then, so a
+    short campus outage does not trigger endless login attempts
+  - on failure it retries once a minute, at most 5 times, then idles
+    until the next scheduled check (no unbounded retry storm)
+  - ICMP probes are forced to IPv4 (-4): campus IPv6 often bypasses the
+    portal, which would otherwise mask a dead IPv4 session as "online"
+  - HTTP probe never follows redirects, so a captive-portal hijack is
+    correctly classified as offline
+  - self-healing: procd respawns the daemon if it dies, plus an internal
+    heartbeat watchdog catches silent hangs
+ .
+ The web UI is optional: the daemon keeps working even if LuCI breaks.
+Maintainer: @@MAINTAINER@@

@@ -1,0 +1,23 @@
+# --- 构建产物 ---
+dist/
+*.ipk
+*.ipk.sha256
+
+# --- 本地工作目录（打包/测试用的临时脚本，不属于仓库内容）---
+.tmp/
+.tmp-verify/
+backup/
+
+# --- 绝不允许进仓库的东西 ---
+# 真实配置里是明文的校园网卡号与密码
+root/etc/config/szu-netauth.local
+*.local.ini
+settings.ini
+
+# --- 编辑器 / 系统 ---
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*~
+*.swp

@@ -1,0 +1,55 @@
+# =============================================================================
+#  /etc/config/szu-netauth  ——  校园网自动认证配置
+#
+#  ⚠ 本文件以**明文**保存校园网卡号与密码，权限应为 600（仅 root 可读）。
+#     不要把它复制到别处、不要提交到任何代码仓库、不要随备份外传。
+#
+#  改完配置后要么在 LuCI 里点「保存并应用」，要么执行
+#      uci commit szu-netauth
+#  procd 的 reload trigger 会唤醒常驻循环去重读配置（最多 5 秒生效）。
+# =============================================================================
+
+config szu-netauth 'global'
+	# 总开关：0 = 只检测不登录（服务仍在跑，状态页会显示「已停用」）
+	option enabled '1'
+
+	# 校园网卡号（注意：是校园网账号，不是学号）
+	option cardid ''
+
+	# 校园网密码（明文，权限 600）
+	option password ''
+
+	# 常规联网检测周期（秒）。默认 3600 = 60 分钟。
+	# 这是「心跳」：每隔这么久确认一次网络是否还通。
+	option net_check '3600'
+
+	# 不在校园网时的重新检测周期（秒）
+	option campus_check '3600'
+
+	# 检测到离线后，重新尝试登录的间隔（秒）。默认 60 = 每分钟一次。
+	option retry_interval '60'
+
+	# 单轮重连最多尝试几次。用尽即停手，等下一个 net_check 周期再检测。
+	# 默认 5。填 0 或负数会被 clamp 到 1。
+	option retry_max '5'
+
+	# 联网判定方式：
+	#   http      只用 HTTP 探测（最快，完全不依赖 ICMP）
+	#   http+ping HTTP 为判据，再用 ICMP 给「为什么离线」分类（默认，推荐）
+	#   ping      只用 ICMP（不推荐：校园网关可能丢弃 ICMP；另有 IPv6 绕过坑）
+	# 注意：ICMP 一定会以 -4（强制 IPv4）发出，否则会走 wan6 导致假在线。
+	option net_check_method 'http+ping'
+
+	# ICMP 探测目标。想完全避开 DNS 依赖可以直接填 IP，例如 223.5.5.5
+	option ping_host 'www.baidu.com'
+
+	# 登录线路，空格分隔。常见网段实测只有 eportal 可达。
+	# 可选：eportal / drcom_wifi / drcom_nth
+	option login_paths 'eportal'
+
+	# 两次登录之间的绝对最小间隔（秒）——防连点、避免触发登录风控
+	option login_min_interval '30'
+
+	# 是否把运行日志落盘到 /etc/szu-netauth/state.log
+	# 默认 0：日志只进 syslog 的内存环形缓冲（不磨损 flash）
+	option persist_log '0'

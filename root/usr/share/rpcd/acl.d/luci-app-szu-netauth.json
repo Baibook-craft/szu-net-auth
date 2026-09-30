@@ -1,0 +1,28 @@
+{
+	"luci-app-szu-netauth": {
+		"description": "深大校园网自动认证：查看状态 / 手动触发检测与登录 / 启停服务 / 读写配置",
+		"read": {
+			"ubus": {
+				"file": [ "read", "exec" ],
+				"rc": [ "list" ],
+				"service": [ "list" ]
+			},
+			"uci": [ "szu-netauth" ],
+			"file": {
+				"/etc/szu-netauth/auth.sh": [ "exec" ],
+				"/etc/init.d/szu-netauth": [ "exec" ]
+			}
+		},
+		"write": {
+			"ubus": {
+				"file": [ "exec" ],
+				"rc": [ "init" ]
+			},
+			"uci": [ "szu-netauth" ],
+			"file": {
+				"/etc/szu-netauth/auth.sh": [ "exec" ],
+				"/etc/init.d/szu-netauth": [ "exec" ]
+			}
+		}
+	}
+}

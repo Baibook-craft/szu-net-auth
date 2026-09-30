@@ -1,0 +1,68 @@
+#!/bin/sh
+# opkg prerm —— 删除 / 升级之前调用，参数 $1 = remove | upgrade
+#
+# ── 升级时故意什么都不做 ─────────────────────────────────────────────
+# opkg 升级会覆盖 /etc/init.d/szu-netauth 和 auth.sh，但常驻进程持有的是
+# 旧 inode，会继续正常跑下去；随后 postinst 里那句 restart 才把它换到新
+# 代码上。所以这里停一下纯属白掉一次线。
+#
+# ── 坑 1：PATH 缺 /sbin，stop 会「静默失败」──────────────────────────
+# opkg 执行钩子时给的 PATH 不含 /sbin 与 /usr/sbin，而 init.d 脚本内部
+# 是通过 ubus 去操作 procd 的。ubus 找不到 → stop 退出码依然是 0，
+# 服务却纹丝不动（对比：同一段里的 disable 是纯 rm 软链，所以它生效了，
+# 于是表现为「软链清干净了、进程还活着」这种极具误导性的中间状态）。
+# 实测踩过，所以在最前面显式兜底 PATH。
+#
+# ── 坑 2：stop 之后必须等进程死透 ────────────────────────────────────
+# auth.sh 的主循环用 5 秒分片的 sleep，而 shell 在前台 sleep 期间**不处理
+# trap**，因此 SIGTERM 最长要 5 秒后才真正退出（实测 t=5s 才消失）。
+# prerm 若发完 stop 就返回，opkg 会紧接着删掉 init.d 和 auth.sh，
+# 留下一个既没有 init 脚本、procd 也不再跟踪的**孤儿进程**。
+#
+# 判断进程是否已退出用 daemon.pid 而不是解析 ubus JSON：
+# auth.sh 的 trap 里会 rm 掉这个文件，文件消失即等价于进程已退出。
+
+[ -n "${IPKG_INSTROOT}" ] && exit 0
+
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+
+case "$1" in
+	upgrade)
+		logger -t szu-netauth "prerm(upgrade)：不停服务，认证继续跑"
+		;;
+	*)
+		logger -t szu-netauth "prerm($1)：停止服务并等待进程退出"
+
+		if [ -x /etc/init.d/szu-netauth ]; then
+			/etc/init.d/szu-netauth stop 2>/dev/null
+			/etc/init.d/szu-netauth disable 2>/dev/null
+		fi
+
+		_pidfile=/var/run/szu-netauth/daemon.pid
+
+		# 最多等 15 秒；正常情况 5~6 秒内 break
+		_i=0
+		while [ "$_i" -lt 15 ]; do
+			_dp="$(cat "$_pidfile" 2>/dev/null)"
+			if [ -z "$_dp" ] || ! kill -0 "$_dp" 2>/dev/null; then
+				break
+			fi
+			sleep 1
+			_i=$((_i + 1))
+		done
+
+		# 兜底：万一 procd 已经不跟踪它、进程却还赖着，就直接收掉
+		_dp="$(cat "$_pidfile" 2>/dev/null)"
+		if [ -n "$_dp" ] && kill -0 "$_dp" 2>/dev/null; then
+			logger -t szu-netauth "prerm：进程 $_dp 未在 15 秒内退出，强制终止"
+			kill "$_dp" 2>/dev/null
+			sleep 1
+			if kill -0 "$_dp" 2>/dev/null; then
+				kill -9 "$_dp" 2>/dev/null
+			fi
+		fi
+		;;
+esac
+
+exit 0
