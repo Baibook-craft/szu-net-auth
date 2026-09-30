@@ -2,6 +2,19 @@ MIT License
 
 Copyright (c) 2026 baibook
 
+---
+
+本项目的认证协议实现演绎自 ceynri/szu-network-connecter
+（https://github.com/ceynri/szu-network-connecter，MIT License，
+Copyright (c) 2020 Ceynri）。上游的版权与许可声明完整保留在
+THIRD-PARTY-NOTICES.md 中，按 MIT 要求随本项目一并分发。
+
+This work is derived from ceynri/szu-network-connecter (MIT License,
+Copyright (c) 2020 Ceynri). The upstream copyright and permission notice
+is preserved in full in THIRD-PARTY-NOTICES.md.
+
+---
+
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
 in the Software without restriction, including without limitation the rights

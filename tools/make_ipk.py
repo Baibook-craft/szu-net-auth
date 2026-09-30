@@ -60,7 +60,7 @@ PKG_NAME = "luci-app-szu-netauth"
 DEFAULT_VERSION = "1.0.0"
 DEFAULT_RELEASE = "1"
 DEFAULT_ARCH = "all"
-DEFAULT_SOURCE = "https://github.com/OWNER/szu-net-auth"
+DEFAULT_SOURCE = "https://github.com/Baibook-craft/szu-net-auth"
 DEFAULT_MAINTAINER = "baibook <240120311+Baibook-craft@users.noreply.github.com>"
 
 # 用 GNU tar 格式：实测官方 ipk 的外层 tar magic 就是 b"ustar  \\0"（GNU 风格），

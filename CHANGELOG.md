@@ -25,6 +25,17 @@
 - 可复现构建（时间戳固定，同源码产出逐字节相同的 ipk）
 - 同时提供标准 luci feed 的 `Makefile`，可用 SDK 构建
 
+### 来源
+
+- 认证协议实现演绎自 [`ceynri/szu-network-connecter`](https://github.com/ceynri/szu-network-connecter)
+  （MIT，Copyright (c) 2020 Ceynri），经由 Windows 桌面版（C#）改写而来。
+  完整的沿用内容清单与上游许可原文见 [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md)。
+
+### 开发方式
+
+- 代码由 AI 编程助手 [WorkBuddy](https://www.workbuddy.cn)（底层模型 DeepSeek-V4.1-Flash）
+  在人类作者的需求、决策与实机验证下编写。详见 README 的「关于本项目的开发方式」。
+
 ### 已知问题
 
 - 安装时 opkg 会打印一句 `ERROR: truncating field 4 <0x...> to 5 byte`。

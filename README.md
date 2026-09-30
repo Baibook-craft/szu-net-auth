@@ -4,8 +4,46 @@
 
 路由器认证一次，家里所有设备共用这条已认证的 WAN；掉线自动重连，再也不用手动打开门户网页。
 
-> 本插件的来源是一台路由器上手工部署的 shell 脚本（见 [`docs/PLAN.md`](docs/PLAN.md)
+> **认证协议来自 [`ceynri/szu-network-connecter`](https://github.com/ceynri/szu-network-connecter)**
+> （MIT License，Copyright (c) 2020 Ceynri）。本项目把那套协议用 shell 在路由器上重新实现，
+> 详见 [来源与致谢](#来源与致谢) 与 [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md)。
+>
+> 本插件的直接来源是一台路由器上手工部署的 shell 脚本（见 [`docs/PLAN.md`](docs/PLAN.md)
 > 与 [`docs/DEPLOY.md`](docs/DEPLOY.md)）。现在打包成标准 `.ipk`，一条命令即可安装。
+
+---
+
+## 来源与致谢
+
+### 这个项目的源头是一位学长的浏览器插件
+
+深大校园网的登录方式比较绕（有线走 `172.30.255.42:801` 的 eportal 门户，WIFI 走
+`drcom.szu.edu.cn`，两套协议还不一样）。**[@ceynri](https://github.com/ceynri)** 在
+2020 年写了一款浏览器扩展把这些都封装成一次点击，并**把协议细节完整地读了出来**：
+
+- 仓库：<https://github.com/ceynri/szu-network-connecter>
+- 许可：MIT（Copyright (c) 2020 Ceynri）
+- 本项目引用的版本：v1.4.1，commit `9d45765`
+
+上游作者已毕业离校，项目不再主动维护，但代码和文档一直是后来者最重要的参考。
+**本项目的认证逻辑（URL、参数、成功判据）全部来自这份实现**，
+我们只是把它从 JavaScript 翻译到 shell，再包成路由器插件。
+
+### 演绎链
+
+```
+ceynri/szu-network-connecter          浏览器扩展（JavaScript）
+  └── src/js/login-post.js
+         ↓ 改写为 C#
+      Windows 桌面版（C# WinForms，src/CampusAuth.cs）
+         ↓ 改写为 POSIX shell + procd + LuCI
+      路由器版（shell 脚本）
+         ↓ 打包为 .ipk
+      本仓库 luci-app-szu-netauth
+```
+
+每一环都换了语言和运行环境，**但认证协议这一层的事实始终沿用上游**。
+具体沿用了哪些常量与参数，[`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md) 里逐条列了。
 
 ---
 
@@ -26,7 +64,7 @@
 
 ### 方法一：直接下载 ipk 安装（推荐）
 
-在**路由器**上执行（把 `Baibook-craft` 换成仓库所属账号）：
+在**路由器**上执行：
 
 ```sh
 # 下载最新的 ipk
@@ -277,10 +315,57 @@ opkg 的 `libbb/unarchive.c` 里 `deb_extract()` 先把整个文件 `gzip -d`，
 ## 免责声明
 
 - 本项目仅用于**自动化你自己账号的正常认证流程**，不绕过任何计费或访问控制。
-- 卡号与密码以明文保存在路由器的 `/etc/config/szu-netauth`（权限 600）。
-  **不要**把这个文件提交到任何仓库、不要随备份外传。仓库本身不含任何凭据。
+- 卡号与密码以明文保存在路由器的 `/etc/config/szu-net-auth`（权限 600）。
+  **不要**把这个文件提交到任何仓库、不要随备份外传。**本仓库不含任何凭据**
+  （默认配置里 `cardid` 与 `password` 都是空值）。
 - 使用前请确认符合你所在学校的网络使用规定。
+- 本项目与深圳大学无隶属关系，也未获得其授权或背书。
+
+---
+
+## 关于本项目的开发方式（AI 参与说明）
+
+这个项目是**人和 AI 协作**完成的。分工如实写在下面 —— 后来读代码的人有权知道
+这段代码是怎么来的。
+
+### AI 是什么
+
+- **工具**：[WorkBuddy](https://www.workbuddy.cn) 编程助手
+- **本次使用的底层模型**：DeepSeek-V4.1-Flash
+
+### AI 做了什么
+
+- 通读上游浏览器插件的 `login-post.js` 与 Windows 桌面版的 `CampusAuth.cs`，
+  把认证协议翻译成 POSIX shell
+- 从零编写 `.ipk` 打包器 `tools/make_ipk.py`，其中包括**摸索出**新版 OpenWrt 的
+  `.ipk` 真实格式（`gzip(tar(...))`，而不是老资料普遍说的 `ar` 归档）
+- 编写 procd 服务定义、LuCI 状态页与设置页、opkg 的四个安装钩子
+- 排查「`Malformed package file`」「卸载后留下孤儿进程」这类只在真机上才暴露的问题
+- 撰写 README、CHANGELOG、本说明与第三方许可声明
+
+### 人做了什么
+
+- 提出全部需求与约束（60 分钟心跳、掉线每分钟重试最多 5 次、断电重启后立刻认证……）
+- 提供真实路由器与校园网环境，在真机上反复执行安装 / 卸载 / 升级 / 重启并回报结果
+- 审阅每一版方案，指出问题要求返工
+- 核对并确认本文的署名与来源信息
+- 决定以 MIT 许可开源、确定仓库名与发布方式
+
+### 请留意
+
+- 代码是**在真实路由器上跑通过的**（装、卸、升级、断电重启均有实测），
+  不是「看着对」就交
+- 但 AI 生成的内容仍可能有疏漏，尤其是**只在特定网络环境成立**的假设。
+  如果你的网段或学校门户与作者的不同，请以 `auth.sh --check` 的实际输出为准
+- 真正的功劳在上游：认证协议是 **@ceynri** 读出来的，
+  AI 只是把它换了一种语言重写
+
+---
 
 ## 许可
 
-[MIT](LICENSE)
+本项目以 [MIT](LICENSE) 许可发布，Copyright (c) 2026 baibook。
+
+认证协议的实现源自 [`ceynri/szu-network-connecter`](https://github.com/ceynri/szu-network-connecter)
+（MIT，Copyright (c) 2020 Ceynri），其完整许可原文与沿用内容清单见
+[`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md)。

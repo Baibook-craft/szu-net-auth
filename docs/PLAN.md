@@ -52,9 +52,9 @@ uname: Linux Kwrt 6.12.66 #0 SMP aarch64 GNU/Linux
 |---|---|---|
 | WAN 口 | `172.17.x.x/23`，网关 `172.17.x.x` | **属于深大校园网段** |
 | WAN 获取方式 | `proto=dhcp`，设备 `wan`（`eth0`） | IP 由校园网 DHCP 下发 |
-| WAN MAC | `d4:da:**:**:**:fa` | |
+| WAN MAC | `d4:da:**:**:**:fa` | 已打码 |
 | LAN | `br-lan` = `192.168.2.1/24`（lan1/lan2/lan3） | 家里设备所在网段 |
-| 出口公网 IP | `223.74.x.x`（China / Guangzhou） | 说明 WAN **已被认证** |
+| 出口公网 IP | `223.74.x.x`（China / Guangzhou） | 说明 WAN **已被认证**（校园网 NAT 出口，非独享） |
 | 上游 DNS | `114.114.114.114`, `192.168.247.6`, `202.96.134.133` | |
 | 时区 | CST（`Wed Sep 30 18:50:06 CST 2026`） | 日志时间正确 |
 

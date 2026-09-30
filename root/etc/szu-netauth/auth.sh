@@ -4,6 +4,9 @@
 # -----------------------------------------------------------------------------
 #  移植自  szu-net-auth-win/src/CampusAuth.cs          （C# WinForms 桌面版）
 #  其原始逻辑来自  szu-network-connecter/src/js/login-post.js  （浏览器插件）
+#                 https://github.com/ceynri/szu-network-connecter
+#                 MIT License, Copyright (c) 2020 Ceynri
+#                 沿用内容清单见仓库根目录 THIRD-PARTY-NOTICES.md
 #
 #  依赖：busybox sh / curl / logger / jsonfilter / ubus
 #        —— 全部为 Kwrt 自带，不新增任何 opkg 包。
