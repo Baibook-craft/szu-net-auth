@@ -187,7 +187,7 @@ def _patch_control(body: bytes, **repl: str) -> bytes:
 # ---------------------------------------------------------------------------
 
 def build(repo: Path, out_dir: Path, version: str, release: str, arch: str,
-          source_url: str, maintainer: str) -> Path:
+          source_url: str, maintainer: str, pkg_name: str = PKG_NAME) -> Path:
     root_dir = repo / "root"
     ipk_dir = repo / "ipk"
 
@@ -224,7 +224,7 @@ def build(repo: Path, out_dir: Path, version: str, release: str, arch: str,
     blob = gz.getvalue()
 
     out_dir.mkdir(parents=True, exist_ok=True)
-    ipk_path = out_dir / f"{PKG_NAME}_{version}-{release}_{arch}.ipk"
+    ipk_path = out_dir / f"{pkg_name}_{version}-{release}_{arch}.ipk"
     ipk_path.write_bytes(blob)
 
     digest = hashlib.sha256(blob).hexdigest()
@@ -296,6 +296,8 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="把包目录打成可 opkg install 的 .ipk")
     ap.add_argument("--repo", default=str(Path(__file__).resolve().parent.parent))
     ap.add_argument("--out", default=None, help="输出目录（默认 <repo>/dist）")
+    ap.add_argument("--name", default=PKG_NAME,
+                    help=f"包名（默认 {PKG_NAME}），决定输出文件名")
     ap.add_argument("--version", default=DEFAULT_VERSION)
     ap.add_argument("--release", default=DEFAULT_RELEASE)
     ap.add_argument("--arch", default=DEFAULT_ARCH)
@@ -311,7 +313,7 @@ def main() -> int:
     repo = Path(args.repo).resolve()
     out_dir = Path(args.out).resolve() if args.out else repo / "dist"
     build(repo, out_dir, args.version, args.release, args.arch,
-          args.source_url, args.maintainer)
+          args.source_url, args.maintainer, args.name)
     return 0
 
 
