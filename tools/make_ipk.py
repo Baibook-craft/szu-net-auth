@@ -229,7 +229,10 @@ def build(repo: Path, out_dir: Path, version: str, release: str, arch: str,
 
     digest = hashlib.sha256(blob).hexdigest()
     sha_path = ipk_path.with_suffix(ipk_path.suffix + ".sha256")
-    sha_path.write_text(f"{digest}  {ipk_path.name}\n", encoding="ascii")
+    # 必须写字节、不能用 write_text：后者在 Windows 上会把 \n 转成 \r\n，
+    # 而 sha256sum -c 解析到行尾的 \r 会当成文件名的一部分，直接报
+    # "No such file or directory"。实测踩过。
+    sha_path.write_bytes(f"{digest}  {ipk_path.name}\n".encode("ascii"))
 
     n_files = sum(1 for e in data_entries if not e[3])
     n_dirs = sum(1 for e in data_entries if e[3])
