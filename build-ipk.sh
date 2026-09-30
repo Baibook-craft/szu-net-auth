@@ -56,7 +56,7 @@ done
 echo "== 打包 luci-app-szu-netauth $VER-$REL =="
 "$PY" tools/make_ipk.py "${ARGS[@]+"${ARGS[@]}"}"
 
-# ---- 4. 可选自检：把 ar 成员和 tar 内容列出来 ----
+# ---- 4. 可选自检：把外层 gzip(tar) 的成员和内层 tar 内容列出来 ----
 if [ "$INSPECT" = "1" ]; then
 	IPK="dist/luci-app-szu-netauth_${VER}-${REL}_all.ipk"
 	echo

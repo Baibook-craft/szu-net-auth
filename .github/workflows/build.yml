@@ -22,15 +22,17 @@ jobs:
         run: |
           set -e
           fail=0
-          # 所有会被路由器执行的脚本
-          for f in build-ipk.sh \
-                   root/etc/init.d/szu-netauth \
+          # 路由器上真正执行的脚本必须是 POSIX sh（BusyBox ash），用 sh -n 校验。
+          # 注意 Ubuntu 上的 sh 是 dash，比 ash 更严格，能过 dash 一般也能过 ash。
+          for f in root/etc/init.d/szu-netauth \
                    root/etc/szu-netauth/auth.sh \
                    root/etc/uci-defaults/50-luci-app-szu-netauth \
                    ipk/postinst ipk/prerm ipk/postrm ; do
             if ! sh -n "$f"; then echo "语法错误: $f"; fail=1; fi
           done
-          bash -n build-ipk.sh
+          # build-ipk.sh 是 **bash** 脚本（用了数组），必须用 bash 校验。
+          # 千万不要拿 sh -n 去测它 —— dash 会报 `Syntax error: "(" unexpected`。
+          if ! bash -n build-ipk.sh; then echo "语法错误: build-ipk.sh"; fail=1; fi
           exit $fail
 
       - name: 检查前端 JS 语法
