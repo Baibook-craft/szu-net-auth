@@ -71,7 +71,7 @@ ceynri/szu-network-connecter          浏览器扩展（JavaScript）
 ```sh
 # 下载最新的 ipk
 wget -O /tmp/luci-app-szu-netauth.ipk \
-  https://github.com/Baibook-craft/szu-net-auth/releases/latest/download/luci-app-szu-netauth_1.1.0-1_all.ipk
+  https://github.com/Baibook-craft/szu-net-auth/releases/latest/download/luci-app-szu-netauth_1.1.1-1_all.ipk
 
 # 安装
 opkg install /tmp/luci-app-szu-netauth.ipk
@@ -81,7 +81,7 @@ opkg install /tmp/luci-app-szu-netauth.ipk
 
 ```sh
 wget -O /tmp/pkg.sha256 \
-  https://github.com/Baibook-craft/szu-net-auth/releases/latest/download/luci-app-szu-netauth_1.1.0-1_all.ipk.sha256
+  https://github.com/Baibook-craft/szu-net-auth/releases/latest/download/luci-app-szu-netauth_1.1.1-1_all.ipk.sha256
 cd /tmp && sha256sum -c pkg.sha256
 ```
 
@@ -90,9 +90,9 @@ cd /tmp && sha256sum -c pkg.sha256
 ```sh
 git clone https://github.com/Baibook-craft/szu-net-auth.git
 cd szu-net-auth
-./build-ipk.sh                      # 产出 dist/luci-app-szu-netauth_1.1.0-1_all.ipk
+./build-ipk.sh                      # 产出 dist/luci-app-szu-netauth_1.1.1-1_all.ipk
 scp dist/*.ipk root@192.168.1.1:/tmp/
-ssh root@192.168.1.1 opkg install /tmp/luci-app-szu-netauth_1.1.0-1_all.ipk
+ssh root@192.168.1.1 opkg install /tmp/luci-app-szu-netauth_1.1.1-1_all.ipk
 ```
 
 打包只需要 **Python 3.8+**，不需要 OpenWrt SDK。
@@ -243,7 +243,8 @@ ICMP —— ping 通推不出「已认证」。所以默认设计是 **HTTP 判�
     每行有 `名称` / `卡号` / `密码`（自带显示·隐藏切换）/ `启用`（开关）四个可编辑格。
   - **排序**：两种等效方式 —— ① 按住行首的 ☰ 手柄上下拖动；② 用 `排序` 列里的
     ▲ / ▼ 按钮上下移一行。**表格从上到下的顺序，就是认证时尝试的顺序**。
-    改完都要点「保存并应用」才会写进配置文件。
+    改完记得点页面左下角的「保存并应用」—— 只点旁边的「保存」不会写进配置文件
+    （这是 LuCI 所有页面的通例：`保存` 只是暂存，`保存并应用` 才真正落盘）。
   - **账号切换**：`auto_switch` 开关，对应下面「多账号」章节的轮换行为。
 
 两个页面都依赖 `ubus` 的 `file exec` 去调用 `/etc/szu-netauth/auth.sh --status`。

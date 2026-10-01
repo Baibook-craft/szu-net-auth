@@ -57,7 +57,7 @@ from pathlib import Path
 SOURCE_DATE_EPOCH = 1767225600
 
 PKG_NAME = "luci-app-szu-netauth"
-DEFAULT_VERSION = "1.1.0"
+DEFAULT_VERSION = "1.1.1"
 DEFAULT_RELEASE = "1"
 DEFAULT_ARCH = "all"
 DEFAULT_SOURCE = "https://github.com/Baibook-craft/szu-net-auth"

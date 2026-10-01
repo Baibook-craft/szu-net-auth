@@ -42,6 +42,13 @@ jobs:
             node --check "$f"
           done
 
+      - name: 检查 Python 脚本语法
+        run: |
+          set -e
+          for f in tools/*.py ; do
+            python3 -m py_compile "$f"
+          done
+
       - name: 检查 JSON 合法性
         run: |
           set -e
@@ -49,18 +56,17 @@ jobs:
             python3 -c "import json,sys; json.load(open(sys.argv[1]))" "$f"
           done
 
+      # 这条闸门不只查配置模板，还会扫全仓库里所有「6 位以上纯数字」和
+      # 「数字+字母的口令形状」。v1.1.0 发布前就是靠它的前身发现真实卡号
+      # 被写进了 auth.sh 注释和 settings.js 的 placeholder。
       - name: 确认仓库里没有凭据
-        run: |
-          set -e
-          # 默认配置里的卡号/密码必须是空的
-          if grep -E "^\s*option (cardid|password) '[^']+'" root/etc/config/szu-netauth ; then
-            echo "!! root/etc/config/szu-netauth 里似乎有真实凭据，拒绝构建"
-            exit 1
-          fi
-          echo "凭据检查通过"
+        run: python3 tools/check-secrets.py
 
       - name: 打包
         run: ./build-ipk.sh
+
+      - name: 确认打好的包里也没有凭据
+        run: python3 tools/check-secrets.py --ipk dist/*.ipk
 
       - name: 自检包体结构
         run: |

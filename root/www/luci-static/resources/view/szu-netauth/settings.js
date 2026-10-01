@@ -38,6 +38,25 @@ function acctIds() {
 	return uci.sections(CONF, 'account').map(function(x) { return x['.name']; });
 }
 
+/* 把一张表里所有行的 ▲▼ 可用状态按**当前**顺序重算一遍。
+ *
+ * 为什么必须重算：LuCI 的 textvalue() 只在渲染那一行时调一次，而 disabled 是
+ * 那时按当时的行号算出来的。挪完行以后行号变了，按钮状态却还是旧的 ——
+ * 会出现「▲ 看着是灰的但其实该能点」「▲ 看着能点，点了没反应」。
+ * （disabled 的按钮压根不会触发 click，所以光靠 handler 里的判断救不回来。） */
+function refreshArrows(scope, ids) {
+	var last = ids.length - 1;
+	ids.forEach(function(sid, idx) {
+		var tr = scope.querySelector('tr[data-sid="%s"]'.format(sid));
+		if (!tr)
+			return;
+		var up = tr.querySelector('button[data-order="up"]');
+		var dn = tr.querySelector('button[data-order="down"]');
+		if (up) up.disabled = !(idx > 0);
+		if (dn) dn.disabled = !(idx >= 0 && idx < last);
+	});
+}
+
 /* btn 是发起这次移动的按钮，用来把 DOM 查找限制在**这张表**里 ——
  * 否则「编辑某一行」的弹窗一旦打开，里面克隆出来的行也会被
  * querySelector 命中，就可能挪错元素。 */
@@ -63,8 +82,12 @@ function acctMove(section_id, dir, btn) {
 			ref.parentNode.insertBefore(cur, ref.nextElementSibling);
 	}
 
+	refreshArrows(scope, acctIds());
+
+	/* 说清楚要点哪个按钮：LuCI 的「保存」只是暂存到当前会话，
+	 * 只有「保存并应用」才会真正写进 /etc/config/szu-netauth。 */
 	ui.addNotification(null, E('p', {},
-		_('顺序已调整。点「保存并应用」后才会写进配置文件。')), 'info');
+		_('顺序已调整。要点「保存并应用」才会写进配置文件（只点「保存」不够）。')), 'info');
 }
 
 return view.extend({
@@ -158,6 +181,8 @@ return view.extend({
 					'class': 'btn cbi-button cbi-button-neutral',
 					'style': 'padding:0 7px;margin:0 2px;line-height:1.5;font-size:12px',
 					'title': hint,
+					/* 给 refreshArrows() 一个稳定的钩子 */
+					'data-order': dir < 0 ? 'up' : 'down',
 					'disabled': on ? null : true,
 					'click': function(ev) {
 						if (ev) {
@@ -167,7 +192,9 @@ return view.extend({
 							 * 断掉冒泡更省心，也不会触发任何行级行为。 */
 							ev.stopPropagation();
 						}
-						if (on) acctMove(section_id, dir, ev && ev.currentTarget);
+						/* 注意：**不要**在这里用上面闭包捕获的 on 做判断 ——
+						 * 挪过行以后它就是旧的了。边界检查统一交给 acctMove()。 */
+						acctMove(section_id, dir, ev && ev.currentTarget);
 						return false;
 					}
 				}, [ glyph ]);
