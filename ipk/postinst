@@ -2,9 +2,10 @@
 # opkg postinst —— 安装/升级成功后调用，参数 $1 = configure
 #
 # 这里做的是「装完立刻就能用」所必需的事：
-#   1. 清掉 LuCI 的菜单/模块索引缓存，否则新装的页面要等重启才出现
-#   2. 重启 rpcd（它缓存 ACL，reload 不重读 acl.d）
-#   3. 建立运行时目录、设置开机自启
+#   1. 把 v1.0.x 的旧版单账号配置迁移成账号列表（幂等）
+#   2. 清掉 LuCI 的菜单/模块索引缓存，否则新装的页面要等重启才出现
+#   3. 重启 rpcd（它缓存 ACL，reload 不重读 acl.d）
+#   4. 建立运行时目录、设置开机自启
 #
 # IPKG_INSTROOT 非空 = 处于 image builder / 离线刷机环境，宿主的 LuCI 不能动。
 
@@ -16,6 +17,50 @@
 PATH=/usr/sbin:/usr/bin:/sbin:/bin
 export PATH
 
+# ---------------------------------------------------------------------------
+# 1. 旧版单账号配置 → 账号列表（幂等迁移）
+#
+# v1.0.x：卡号、密码放在  config szu-netauth 'global'  里
+# v1.1.0：改为独立的  config account '<段名>'  段，可以放任意多个账号
+#
+# 两个条件同时满足才迁，所以重复执行不会有副作用：
+#   a) global.cardid 非空                —— 确实存在旧配置
+#   b) 没有任何 account 段的 cardid 非空 —— 说明还没迁过
+# ---------------------------------------------------------------------------
+_netauth_migrate() {
+	_old_id="$(uci -q get szu-netauth.global.cardid)"
+	[ -n "$_old_id" ] || return 0
+
+	for _s in $(uci -q show szu-netauth 2>/dev/null \
+	           | sed -n 's/^szu-netauth\.\([^.=]*\)=account$/\1/p'); do
+		[ -n "$(uci -q get "szu-netauth.$_s.cardid")" ] && return 0
+	done
+
+	uci -q get szu-netauth.main >/dev/null 2>&1 || uci -q set szu-netauth.main=account
+	uci -q set szu-netauth.main.label='主号'
+	uci -q set szu-netauth.main.cardid="$_old_id"
+	uci -q set szu-netauth.main.password="$(uci -q get szu-netauth.global.password)"
+	uci -q set szu-netauth.main.enabled='1'
+	uci -q delete szu-netauth.global.cardid
+	uci -q delete szu-netauth.global.password
+	uci -q commit szu-netauth
+	logger -t szu-netauth "已把旧的单账号配置迁移为账号列表（账号名 main）；可在 LuCI 里继续添加账号"
+	return 0
+}
+_netauth_migrate
+
+# ---------------------------------------------------------------------------
+# 2. 找出第一个「填了卡号」的账号 —— 决定要不要直接把服务拉起来
+# ---------------------------------------------------------------------------
+_netauth_account=''
+for _s in $(uci -q show szu-netauth 2>/dev/null \
+           | sed -n 's/^szu-netauth\.\([^.=]*\)=account$/\1/p'); do
+	if [ -n "$(uci -q get "szu-netauth.$_s.cardid")" ]; then
+		_netauth_account="$_s"
+		break
+	fi
+done
+
 mkdir -p /var/run/szu-netauth 2>/dev/null
 
 rm -f  /tmp/luci-indexcache* 2>/dev/null
@@ -25,15 +70,13 @@ rm -rf /tmp/luci-modulecache  2>/dev/null
 if [ -x /etc/init.d/szu-netauth ]; then
 	/etc/init.d/szu-netauth enable 2>/dev/null
 
-	# 已填过凭据（升级场景 / 二次安装）就直接把服务拉起来；
-	# 全新安装凭据为空时留着手动启动，避免无意义的登录尝试。
-	_cardid="$(uci -q get szu-netauth.global.cardid)"
-	_password="$(uci -q get szu-netauth.global.password)"
-	if [ -n "$_cardid" ] && [ -n "$_password" ]; then
+	# 已经有账号（升级场景 / 二次安装）就直接把服务拉起来；
+	# 全新安装账号为空时留着手动启动，避免无意义的登录尝试。
+	if [ -n "$_netauth_account" ]; then
 		/etc/init.d/szu-netauth restart 2>/dev/null
-		logger -t szu-netauth "已安装/升级，服务已启动"
+		logger -t szu-netauth "已安装/升级，服务已启动（使用账号 $_netauth_account）"
 	else
-		logger -t szu-netauth "已安装。请打开「服务 → 校园网认证」填写卡号与密码"
+		logger -t szu-netauth "已安装。请打开「服务 → 校园网认证」添加账号"
 	fi
 fi
 

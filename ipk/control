@@ -14,6 +14,10 @@ Description: LuCI app: campus network auto authentication (procd daemon)
  .
  Highlights:
   - pure shell + procd, no Python/Lua runtime needed at runtime
+  - multiple accounts: keep several campus accounts and rotate to the next
+    one whenever a login fails; the first row of the list is always tried
+    first after a boot, and the order is editable (drag / arrow buttons)
+    from the web UI
   - checks the network every 60 min by default and only then, so a
     short campus outage does not trigger endless login attempts
   - on failure it retries once a minute, at most 5 times, then idles

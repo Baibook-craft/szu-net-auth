@@ -2,53 +2,195 @@
 'require form';
 'require view';
 'require uci';
+'require ui';
 
 /*
  * 深大校园网自动认证 · 设置页
  *
  * 本页**不需要任何后端代码**：form.Map 自带「读取 UCI → 校验 → 写回 → commit」，
- * commit 之后 procd 的 reload trigger 会让常驻循环按新配置重启。
+ * commit 之后 procd 的 reload trigger 会让常驻循环按新配置重读（最多 5 秒生效）。
  *
  * 密码字段用 o.password = true —— LuCI 的 ui.Textfield 在这个属性下会**自动**
  * 渲染一个「显示/隐藏密码」按钮，不需要自己写。
  *
- * 间隔用 datatype = 'range(...)' 做校验，对应 C# 版 AppSettings 里的 Clamp()。
+ * 间隔用 datatype = 'range(...)' 做校验，对应 auth.sh 里的 clamp()。
+ *
+ * ---------------------------------------------------------------------------
+ * 账号列表为什么用 GridSection、顺序又是怎么落盘的
+ *
+ * form.GridSection 天生具备：增行 / 删行 / 行首 ☰ 拖拽排序（s.sortable）。
+ * 拖拽的实现在本机 /www/luci-static/resources/form.js 里：
+ *     handleDrop() → this.map.data.move(config, sid1, sid2, after)
+ * 而 uci.js 的 move() 会把所有段的 .index 重排一遍，并在 state.reorder[conf]
+ * 打上标记；用户点「保存并应用」时 uci.save() 末尾会调 reorderSections()，
+ * 按 .index 调 rpcd 的 uci order —— 顺序就这样真正写进 /etc/config/szu-netauth。
+ *
+ * 所以本页自绘的 ▲▼ 按钮只要调同一个 uci.move()，行为就和拖拽完全一致，
+ * 不需要任何后端配合。
+ * ---------------------------------------------------------------------------
  */
+
+var CONF = 'szu-netauth';
+
+/* ---------------- 账号排序：上移 / 下移 ---------------- */
+
+function acctIds() {
+	return uci.sections(CONF, 'account').map(function(x) { return x['.name']; });
+}
+
+/* btn 是发起这次移动的按钮，用来把 DOM 查找限制在**这张表**里 ——
+ * 否则「编辑某一行」的弹窗一旦打开，里面克隆出来的行也会被
+ * querySelector 命中，就可能挪错元素。 */
+function acctMove(section_id, dir, btn) {
+	var ids = acctIds();
+	var i = ids.indexOf(section_id);
+	var j = i + dir;
+	if (i < 0 || j < 0 || j >= ids.length)
+		return;
+
+	/* 只改浏览器里的顺序（和内置拖拽一模一样），不直接落盘 ——
+	 * 统一由页面下方的「保存并应用」去 commit，语义和其他字段一致。 */
+	uci.move(CONF, section_id, ids[j], dir > 0);
+
+	/* 顺手把表格里的 <tr> 也挪一下，否则点完看不出任何变化 */
+	var scope = (btn && btn.closest && btn.closest('table')) || document;
+	var cur = scope.querySelector('tr[data-sid="%s"]'.format(section_id));
+	var ref = scope.querySelector('tr[data-sid="%s"]'.format(ids[j]));
+	if (cur && ref) {
+		if (dir < 0)
+			ref.parentNode.insertBefore(cur, ref);
+		else
+			ref.parentNode.insertBefore(cur, ref.nextElementSibling);
+	}
+
+	ui.addNotification(null, E('p', {},
+		_('顺序已调整。点「保存并应用」后才会写进配置文件。')), 'info');
+}
 
 return view.extend({
 	load: function() {
 		return Promise.all([
-			uci.load('szu-netauth')
+			uci.load(CONF)
 		]);
 	},
 
 	render: function() {
 		var m, s, o;
+		var legacyId = uci.get(CONF, 'global', 'cardid');
 
-		m = new form.Map('szu-netauth', _('校园网认证'),
-			_('配置深大校园网自动认证。修改后点「保存并应用」，配置变化会让常驻循环自动按新配置重启。'));
+		m = new form.Map(CONF, _('校园网认证'),
+			_('配置深大校园网自动认证。修改后点「保存并应用」，配置变化会让常驻循环自动按新配置读入。'));
 
 		/* ---------------- 基本设置 ---------------- */
-		s = m.section(form.NamedSection, 'global', 'szu-netauth', _('基本设置'));
+		s = m.section(form.NamedSection, 'global', CONF, _('基本设置'));
 		s.anonymous = true;
 
 		o = s.option(form.Flag, 'enabled', _('启用自动认证'),
 			_('关闭后常驻服务仍在运行，但只做检测、不再发起登录（状态页会显示「已停用」）。'));
 		o.rmempty = false;
 
-		o = s.option(form.Value, 'cardid', _('校园网卡号'),
-			_('注意：是校园网卡号，不是学号。'));
-		o.datatype = 'string';
-		o.rmempty = false;
+		/* ---------------- 账号列表 ---------------- */
+		/* 说明写成数组 + E('br')，而不是靠字符串里的 \n ——
+		 * LuCI 的 dom 只把字符串当纯文本塞进文本节点，换行怎么处理因版本而异，
+		 * 显式给 <br> 最稳。 */
+		s = m.section(form.GridSection, 'account', _('账号列表'), [
+			_('认证时按这个表从上到下的顺序轮流尝试：'), E('br'),
+			_('① 开机后（以及每一轮重新开始重连时）固定先试第 1 行；'), E('br'),
+			_('② 这一次没通过 → 等「重连尝试间隔」秒后试第 2 行；'), E('br'),
+			_('③ 试到最后一行就绕回第 1 行，如此循环，直到用满「单轮最多尝试次数」次就停手；'), E('br'),
+			_('④ 只要有一次成功，下一轮又从第 1 行重新开始。'), E('br'),
+			_('想换首次尝试的账号，把它挪到最上面即可：拖动行首的 ☰，或者点「排序」列里的 ▲▼。'), E('br'),
+			_('卡号留空的行、以及「启用」没勾的行，都会被自动忽略。'),
+			legacyId ? E('div', { 'style': 'margin-top:6px;color:#c62828' },
+				_('注意：检测到旧版单账号配置（global.cardid）。账号列表为空时它仍会作为兜底生效；建议把卡号填进下面的列表。')) : ''
+		]);
+		s.anonymous = true;   /* 不显示 LuCI 自动生成的段名（对用户没意义） */
+		s.addremove = true;   /* 可加行、可删行 */
+		s.sortable = true;    /* 行首 ☰ 拖拽排序（内置能力，同样会写回配置） */
 
-		o = s.option(form.Value, 'password', _('密码'),
-			_('以明文保存在 /etc/config/szu-netauth（权限 600，仅 root 可读）。输入框右侧的按钮可显示/隐藏。'));
-		o.password = true;
+		o = s.option(form.Value, 'label', _('名称'));
+		o.editable = true;    /* 直接在表格里编辑，不必开弹窗 */
+		o.rmempty = true;     /* 允许留空：留空时界面按位置叫「账号 1 / 账号 2」 */
+		o.placeholder = _('例如：主号');
+		o.width = '14%';
+
+		o = s.option(form.Value, 'cardid', _('校园网卡号'));
+		o.editable = true;
 		o.datatype = 'string';
+		o.rmempty = true;     /* 允许留空：留空的账号后端会自动跳过 */
+		o.placeholder = '123456';
+		o.width = '18%';
+
+		o = s.option(form.Value, 'password', _('密码'));
+		o.editable = true;
+		o.password = true;    /* 自动带「显示 / 隐藏密码」按钮 */
+		o.datatype = 'string';
+		o.rmempty = true;
+		o.width = '22%';
+
+		o = s.option(form.Flag, 'enabled', _('启用'));
+		o.editable = true;
+		o.default = '1';
+		o.rmempty = false;
+		o.width = '8%';
+
+		/* 「排序」列：自绘 ▲▼ 按钮。
+		 *
+		 * 这里**故意**不设 o.editable，理由有两条（都是读 form.js 得到的）：
+		 *   1) CBIGridSection.parse() 的判断是
+		 *          if (!this.children[j].editable || this.children[j].modalonly) continue;
+		 *      editable 为假 → 整列在保存时被跳过，绝不会去写什么配置；
+		 *   2) renderChildren() 里可编辑的用 opt.render()，否则走
+		 *      renderTextValue() —— 而后者是把这个值直接塞进 <td>：
+		 *          E('td', {...}, (value != null) ? value : E('em', _('none')))
+		 *      所以 textvalue() 返回一个 DOM 节点是合法的。
+		 * 这样既排掉了「浏览器控件 → UCI」这一整条链，又不用给控件造 id。 */
+		o = s.option(form.DummyValue, '_acct_order', _('排序'));
+		o.modalonly = false;  /* 只在表格里出现，不进「添加」弹窗 */
+		o.width = '92px';
+		o.textvalue = function(section_id) {
+			var ids = acctIds();
+			var idx = ids.indexOf(section_id);
+			var last = ids.length - 1;
+
+			function arrow(glyph, dir, on, hint) {
+				return E('button', {
+					'class': 'btn cbi-button cbi-button-neutral',
+					'style': 'padding:0 7px;margin:0 2px;line-height:1.5;font-size:12px',
+					'title': hint,
+					'disabled': on ? null : true,
+					'click': function(ev) {
+						if (ev) {
+							ev.preventDefault();
+							/* 别让点击冒泡到 <tr>：行上挂着拖拽的 mousedown
+							 * 处理器（s.sortable），虽然它只对 ☰ 生效，但
+							 * 断掉冒泡更省心，也不会触发任何行级行为。 */
+							ev.stopPropagation();
+						}
+						if (on) acctMove(section_id, dir, ev && ev.currentTarget);
+						return false;
+					}
+				}, [ glyph ]);
+			}
+
+			return E('span', { 'style': 'white-space:nowrap' }, [
+				arrow('▲', -1, idx > 0, _('上移：更早尝试')),
+				arrow('▼', +1, idx >= 0 && idx < last, _('下移：更晚尝试'))
+			]);
+		};
+
+		/* ---------------- 账号切换 ---------------- */
+		s = m.section(form.NamedSection, 'global', CONF, _('账号切换'));
+		s.anonymous = true;
+
+		o = s.option(form.Flag, 'auto_switch', _('登录失败后自动切换账号'),
+			_('开启（默认）：一次没通过，就换账号列表里的下一个再试；用满「单轮最多尝试次数」才停手。' +
+			  '关闭：永远只用账号列表里的第一个账号 —— 等同于单账号模式。'));
+		o.default = '1';
 		o.rmempty = false;
 
 		/* ---------------- 检测节奏 ---------------- */
-		s = m.section(form.NamedSection, 'global', 'szu-netauth', _('检测节奏'));
+		s = m.section(form.NamedSection, 'global', CONF, _('检测节奏'));
 		s.anonymous = true;
 
 		o = s.option(form.Value, 'net_check', _('常规检测间隔'),
@@ -59,14 +201,15 @@ return view.extend({
 		o.rmempty = false;
 
 		o = s.option(form.Value, 'retry_interval', _('重连尝试间隔'),
-			_('秒。检测到离线后，重新尝试登录的间隔。默认 60 = 每分钟一次。'));
+			_('秒。检测到离线后，重新尝试登录的间隔。默认 60 = 每分钟一次。' +
+			  '多账号时，这也是「换下一个账号」的节奏。'));
 		o.datatype = 'range(10,3600)';
 		o.placeholder = 60;
 		o.rmempty = false;
 
 		o = s.option(form.Value, 'retry_max', _('单轮最多尝试次数'),
-			_('连续尝试这么多次仍失败就停手，等下一个「常规检测间隔」再重新检测。' +
-			  '默认 5。设为 1 表示一次不成就等下一轮。'));
+			_('连续尝试这么多次仍失败就停手，等下一个「常规检测间隔」再重新检测。默认 5。' +
+			  '注意这是「总的」尝试次数上限 —— 多账号时每个账号各占一次。'));
 		o.datatype = 'range(1,50)';
 		o.placeholder = 5;
 		o.rmempty = false;
@@ -78,7 +221,7 @@ return view.extend({
 		o.rmempty = false;
 
 		/* ---------------- 联网判定 ---------------- */
-		s = m.section(form.NamedSection, 'global', 'szu-netauth', _('联网判定'));
+		s = m.section(form.NamedSection, 'global', CONF, _('联网判定'));
 		s.anonymous = true;
 
 		o = s.option(form.ListValue, 'net_check_method', _('判定方式'),
@@ -97,7 +240,7 @@ return view.extend({
 		o.rmempty = false;
 
 		/* ---------------- 登录与风控 ---------------- */
-		s = m.section(form.NamedSection, 'global', 'szu-netauth', _('登录与风控'));
+		s = m.section(form.NamedSection, 'global', CONF, _('登录与风控'));
 		s.anonymous = true;
 
 		o = s.option(form.ListValue, 'login_paths', _('登录线路'),
@@ -116,7 +259,7 @@ return view.extend({
 		o.rmempty = false;
 
 		/* ---------------- 日志 ---------------- */
-		s = m.section(form.NamedSection, 'global', 'szu-netauth', _('日志'));
+		s = m.section(form.NamedSection, 'global', CONF, _('日志'));
 		s.anonymous = true;
 
 		o = s.option(form.Flag, 'persist_log', _('持久化运行日志到 flash'),

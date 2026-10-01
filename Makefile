@@ -14,7 +14,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=luci-app-szu-netauth
-PKG_VERSION:=1.0.0
+PKG_VERSION:=1.1.0
 PKG_RELEASE:=1
 
 PKG_LICENSE:=MIT
@@ -43,7 +43,9 @@ define Package/$(PKG_NAME)/install
 	chmod 0755 $(1)/etc/init.d/szu-netauth
 	chmod 0755 $(1)/etc/uci-defaults/50-luci-app-szu-netauth
 	chmod 0755 $(1)/etc/szu-netauth/auth.sh
-	chmod 0644 $(1)/etc/config/szu-netauth
+	# 0600：配置文件里是明文卡号密码，只有 root 该读到（OpenWrt 自带的那几个
+	# 含口令的 config 也都是 0600）。tools/make_ipk.py 里用 SECRET_FILES 对齐。
+	chmod 0600 $(1)/etc/config/szu-netauth
 endef
 
 # 用户改过的卡号密码，升级时不能被覆盖（opkg 会保留并生成 .opkg 后缀的新文件）

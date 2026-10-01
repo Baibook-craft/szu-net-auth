@@ -176,6 +176,17 @@ function paint(st, log, svc) {
 		(st.last_login ? fmtTs(st.last_login) : '尚无登录记录') +
 		(st.last_login_result ? '　·　' + st.last_login_result : ''));
 
+	// 多账号：总数 + 打码后的列表（后端只给打码值，明文卡号永远不会到前端）
+	var nAcct = +st.account_count || 0;
+	setText('szu-accts', nAcct > 0
+		? (nAcct + ' 个：' + (st.accounts || '') +
+		   (nAcct > 1
+			? (st.auto_switch ? '　（失败后按顺序自动切换）' : '　（已关闭自动切换，只用第一个）')
+			: ''))
+		: '未配置 —— 请到「设置」页的账号列表里添加');
+	setText('szu-next-acct', st.next_account);
+	setText('szu-last-acct', st.last_account);
+
 	// 重连轮次：本轮已失败几次 / 上限几次
 	var fc = +st.fail_count || 0, rmax = +st.retry_max || 0;
 	setText('szu-gate', fc > 0
@@ -275,6 +286,9 @@ return view.extend({
 					vrow('ICMP 探测', E('span', { 'id': 'szu-ping' })),
 					vrow('判定方式', E('span', { 'id': 'szu-method' })),
 					vrow('上次登录结果', E('span', { 'id': 'szu-lastlogin' })),
+					vrow('账号列表', E('span', { 'id': 'szu-accts' })),
+					vrow('下次使用账号', E('span', { 'id': 'szu-next-acct' })),
+					vrow('上次使用账号', E('span', { 'id': 'szu-last-acct' })),
 					vrow('重连轮次', E('span', { 'id': 'szu-gate' })),
 					vrow('检测节奏', E('span', { 'id': 'szu-iv' })),
 					vrow('登录线路', E('span', { 'id': 'szu-paths' }))

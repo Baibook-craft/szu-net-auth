@@ -29,6 +29,11 @@
 #    - 防连点闸门：两次登录之间的绝对最小间隔（login_min_interval）
 #    - 心跳看门狗：补 procd respawn 抓不到「进程卡死」的短板
 #    - 所有出网请求加 --noproxy '*'，避免被本机 passwall/xray 代理层接管
+#    - 多账号（C# 版没有）：/etc/config/szu-netauth 里可以配任意多个
+#      config account 段。**顺序即认证顺序** —— 开机后第一次固定先试列表
+#      第一个；失败就换下一个；到头绕回第一个循环，直到用满 retry_max 次
+#      就停手；只要成功一次，下一轮又从第一个开始。
+#      状态存在 $STATE_DIR/cur_account 里（tmpfs，重启即清空）。
 # =============================================================================
 
 export PATH=/usr/sbin:/usr/bin:/sbin:/bin
@@ -43,6 +48,8 @@ HEARTBEAT=$STATE_DIR/heartbeat
 WAKE_FILE=$STATE_DIR/wake
 LOGIN_TS_FILE=$STATE_DIR/last_login
 FAIL_FILE=$STATE_DIR/fail_count
+CUR_ACCT_FILE=$STATE_DIR/cur_account    # 下一次尝试该用哪个账号（不存在 = 用第一个）
+LAST_ACCT_FILE=$STATE_DIR/last_account  # 上一次实际尝试用的账号（供状态页显示）
 PERSIST_LOG=/etc/szu-netauth/state.log
 
 EPORTAL_BASE='http://172.30.255.42:801'
@@ -165,6 +172,7 @@ cfg() {
 	config_get      LOGIN_PATHS    "$CONF_SEC" login_paths        'eportal'
 	config_get      LOGIN_MIN      "$CONF_SEC" login_min_interval 30
 	config_get_bool PERSIST_LOG_ON "$CONF_SEC" persist_log        0
+	config_get_bool AUTO_SWITCH    "$CONF_SEC" auto_switch        1
 
 	NET_CHECK=$(clamp "$NET_CHECK" 30 86400)
 	CAMPUS_CHECK=$(clamp "$CAMPUS_CHECK" 30 86400)
@@ -178,6 +186,146 @@ cfg() {
 	esac
 	[ -z "$PING_HOST" ] && PING_HOST='www.baidu.com'
 	[ -z "$LOGIN_PATHS" ] && LOGIN_PATHS=eportal
+
+	# ---- 账号列表 ----
+	# 按配置文件里的先后顺序，收集「启用中且填了卡号」的账号。
+	# ACCT_LIST 里存的是**段名**（段名不含空格，所以按空格分割是安全的）。
+	ACCT_LIST=''; ACCT_SUMMARY=''; ACCT_COUNT=0
+	config_foreach _cfg_collect_account account
+
+	# 兼容 v1.0.x 的单账号配置：一个可用的 account 段都没有时，退回读
+	# global.cardid / global.password。安装时 postinst 一般已经迁移过了，
+	# 这里只是保险 —— 万一没迁，认证也不能因此停摆。
+	if [ "$ACCT_COUNT" -eq 0 ] && { [ -n "$CARDID" ] || [ -n "$PASSWORD" ]; }; then
+		ACCT_LIST='__legacy__'
+		ACCT_COUNT=1
+	fi
+
+	# 给状态页 / --check 用的一行摘要（卡号打码，**绝不包含密码**）
+	for _cfg_n in $ACCT_LIST; do
+		acct_load "$_cfg_n"
+		_cfg_one="$(acct_display "$_cfg_n")（$(mask_id "$ACCT2_ID")）"
+		if [ -z "$ACCT_SUMMARY" ]; then
+			ACCT_SUMMARY="$_cfg_one"
+		else
+			ACCT_SUMMARY="$ACCT_SUMMARY, $_cfg_one"
+		fi
+	done
+}
+
+# -----------------------------------------------------------------------------
+# 多账号
+#
+# 规则（与 /etc/config/szu-netauth 里账号列表的注释一致）：
+#   · 顺序 = 认证顺序；**列表第一个 = 开机后首次尝试的那个**
+#   · 本次失败 → 指针挪到下一个；到末尾绕回第一个，如此循环
+#   · 成功 / 本轮用尽 / 新一轮开始 → 指针清空，重新从第一个开始
+#   · auto_switch=0 → 永远只用第一个，整套指针机制旁路
+#
+# 指针内容 = 账号**段名**，存在 $CUR_ACCT_FILE（tmpfs，重启即清空）。
+# 这也正好让「开机后第一次用第一个账号」天然成立。
+# -----------------------------------------------------------------------------
+
+# config_foreach 的回调：收集「启用中且卡号非空」的账号段名，保持文件顺序。
+# 注意 ACCT_LIST 拼接时不留前导空格 —— acct_pick 用 ${ACCT_LIST%% *} 取第一个。
+_cfg_collect_account() {
+	config_get_bool _ca_en "$1" enabled 1
+	[ "$_ca_en" -ne 1 ] && return 0
+	config_get _ca_id "$1" cardid ''
+	[ -z "$_ca_id" ] && return 0
+	if [ -z "$ACCT_LIST" ]; then
+		ACCT_LIST="$1"
+	else
+		ACCT_LIST="$ACCT_LIST $1"
+	fi
+	ACCT_COUNT=$((ACCT_COUNT + 1))
+	return 0
+}
+
+# 读一个账号的字段到 ACCT2_*（独立前缀，绝不覆盖主流程的 CARDID / PASSWORD）
+acct_load() {
+	if [ "$1" = '__legacy__' ]; then
+		ACCT2_ID=$CARDID
+		ACCT2_PW=$PASSWORD
+		return 0
+	fi
+	config_get ACCT2_ID "$1" cardid   ''
+	config_get ACCT2_PW "$1" password ''
+	return 0
+}
+
+# 账号的显示名：填了 label 就用它，否则按位置叫「账号 N」
+acct_display() {
+	if [ "$1" = '__legacy__' ]; then printf '%s' '默认账号'; return 0; fi
+	config_get _ad_lb "$1" label ''
+	if [ -n "$_ad_lb" ]; then printf '%s' "$_ad_lb"; return 0; fi
+	printf '账号 %s' "$(acct_no "$1")"
+}
+
+# 账号在列表里的序号（从 1 起）
+acct_no() {
+	_an_i=0
+	for _an_n in $ACCT_LIST; do
+		_an_i=$((_an_i + 1))
+		if [ "$_an_n" = "$1" ]; then printf '%s' "$_an_i"; return 0; fi
+	done
+	printf '%s' '?'
+}
+
+# 卡号打码：123456 → 123***，空 → (未填)
+# 日志与网页上只出现打码后的样子，明文卡号不进任何输出。
+mask_id() {
+	_mi_v=$1
+	[ -z "$_mi_v" ] && { printf '%s' '(未填)'; return 0; }
+	if [ "${#_mi_v}" -le 3 ]; then printf '%s' '***'; return 0; fi
+	_mi_rest=${_mi_v#???}
+	printf '%s***' "${_mi_v%"$_mi_rest"}"
+}
+
+# 决定本次尝试用哪个账号。结果写进 ACCT_USE（段名）/ ACCT_ID / ACCT_PW。
+# 返回 1 = 一个可用账号都没有（此时 ACCT_USE 为空）。
+acct_pick() {
+	ACCT_USE=''; ACCT_ID=''; ACCT_PW=''
+	[ "$ACCT_COUNT" -gt 0 ] || return 1
+
+	_ap_sel=''
+	if [ "$AUTO_SWITCH" = "1" ]; then
+		_ap_cur=$(cat "$CUR_ACCT_FILE" 2>/dev/null)
+		# 指针指向的段可能已被删除或停用 —— 那就退回第一个，不硬撑
+		case " $ACCT_LIST " in
+			*" $_ap_cur "*) [ -n "$_ap_cur" ] && _ap_sel=$_ap_cur ;;
+		esac
+	fi
+	[ -z "$_ap_sel" ] && _ap_sel=${ACCT_LIST%% *}   # 列表第一个（开机 / 新一轮）
+
+	ACCT_USE=$_ap_sel
+	acct_load "$ACCT_USE"
+	ACCT_ID=$ACCT2_ID
+	ACCT_PW=$ACCT2_PW
+	return 0
+}
+
+# 登录失败后：把指针挪到列表里的下一个（到末尾绕回第一个）
+acct_advance() {
+	[ "$AUTO_SWITCH" = "1" ] || return 0
+	[ "$ACCT_COUNT" -gt 1 ] || return 0
+	[ -n "$ACCT_USE" ] || return 0
+
+	_aa_next=''; _aa_hit=0
+	for _aa_n in $ACCT_LIST; do
+		if [ "$_aa_hit" = "1" ]; then _aa_next=$_aa_n; break; fi
+		if [ "$_aa_n" = "$ACCT_USE" ]; then _aa_hit=1; fi
+	done
+	[ -z "$_aa_next" ] && _aa_next=${ACCT_LIST%% *}   # 已经是最后一个 → 绕回第一个
+
+	printf '%s' "$_aa_next" > "$CUR_ACCT_FILE"
+	return 0
+}
+
+# 回到第一个账号（登录成功 / 本轮用尽 / 新一轮开始）
+acct_reset() {
+	rm -f "$CUR_ACCT_FILE" 2>/dev/null
+	return 0
 }
 
 # 本轮重连已失败的次数（存文件，跨 sleep 保留）。
@@ -377,13 +525,35 @@ login_drcom() {
 }
 
 # 按配置顺序尝试，第一条成功即停（C# 是三路并发，只有一条可用时二者等价）
+#
+# 多账号：每次调用先 acct_pick() 选出一个账号；失败时**由调用方**
+# （daemon_main）调 acct_advance() 把指针挪到下一个。这样 --once / --login
+# 这些一次性命令不会打乱常驻循环的轮换状态（和 fail_count 的处理原则一致）。
 attempt_login() {
 	LOGIN_OK=0
 	LOGIN_MSG=''
-	if [ -z "$CARDID" ] || [ -z "$PASSWORD" ]; then
-		LOGIN_MSG='未设置卡号或密码（/etc/config/szu-netauth）'
+
+	if ! acct_pick; then
+		LOGIN_MSG='还没有可用账号（/etc/config/szu-netauth 里没填卡号）'
 		return 1
 	fi
+
+	# 「上次实际用的账号」——状态页要显示，卡号打码
+	ACCT_TXT="$(acct_display "$ACCT_USE")（$(mask_id "$ACCT_ID")）"
+	printf '%s' "$ACCT_TXT" > "$LAST_ACCT_FILE"
+	nlog "尝试账号：$ACCT_TXT"
+
+	if [ -z "$ACCT_ID" ] || [ -z "$ACCT_PW" ]; then
+		LOGIN_MSG="账号「$(acct_display "$ACCT_USE")」的卡号或密码是空的"
+		date +%s > "$LOGIN_TS_FILE"
+		printf '%s' "$LOGIN_MSG" > "$STATE_DIR/last_login_result"
+		return 1
+	fi
+
+	# login_eportal / login_drcom 读的是这两个全局变量，把选中的账号填进去
+	CARDID=$ACCT_ID
+	PASSWORD=$ACCT_PW
+
 	for _p in $LOGIN_PATHS; do
 		nlog "尝试线路：$_p"
 		case "$_p" in
@@ -411,6 +581,12 @@ write_status() {
 	_ll=$(cat "$LOGIN_TS_FILE" 2>/dev/null); [ -z "$_ll" ] && _ll=0
 	_lr=$(cat "$STATE_DIR/last_login_result" 2>/dev/null)
 	_fc=$(fail_count)
+	# 账号：last = 上次实际尝试的；next = 按轮换规则下一次要用的（纯读取，无副作用）
+	_ws_last=$(cat "$LAST_ACCT_FILE" 2>/dev/null)
+	_ws_next=''
+	if [ "$ACCT_COUNT" -gt 0 ] && acct_pick; then
+		_ws_next="$(acct_display "$ACCT_USE")（$(mask_id "$ACCT_ID")）"
+	fi
 	_nr=$(cat "$STATE_DIR/next_retry" 2>/dev/null); [ -z "$_nr" ] && _nr=0
 	_pid=$(cat "$STATE_DIR/daemon.pid" 2>/dev/null); [ -z "$_pid" ] && _pid=0
 	_dr=0
@@ -424,7 +600,7 @@ write_status() {
 	case "$_pm" in ''|*[!0-9.]*) _pm=0 ;; esac
 
 	cat > "$STATUS_FILE.tmp" <<EOF
-{"ts":$_now,"time":"$(date '+%Y-%m-%d %H:%M:%S')","state":"$_st","detail":"$(jesc "$_de")","color":"$_co","enabled":$ENABLED,"campus":$_ca,"online":$_on,"wan_ip":"$(jesc "$WANIP")","net_check":$NET_CHECK,"campus_check":$CAMPUS_CHECK,"login_paths":"$(jesc "$LOGIN_PATHS")","last_check":$_now,"last_login":$_ll,"last_login_result":"$(jesc "$_lr")","fail_count":$_fc,"retry_max":$RETRY_MAX,"retry_interval":$RETRY_INTERVAL,"next_retry":$_nr,"daemon_pid":$_pid,"daemon_running":$_dr,"interval":$_iv,"ping_ok":$_po,"ping_ms":$_pm,"ping_host":"$(jesc "$PING_HOST")","net_check_method":"$(jesc "$NET_METHOD")","offline_kind":"$(jesc "$OFFLINE_KIND")"}
+{"ts":$_now,"time":"$(date '+%Y-%m-%d %H:%M:%S')","state":"$_st","detail":"$(jesc "$_de")","color":"$_co","enabled":$ENABLED,"campus":$_ca,"online":$_on,"wan_ip":"$(jesc "$WANIP")","net_check":$NET_CHECK,"campus_check":$CAMPUS_CHECK,"login_paths":"$(jesc "$LOGIN_PATHS")","last_check":$_now,"last_login":$_ll,"last_login_result":"$(jesc "$_lr")","fail_count":$_fc,"retry_max":$RETRY_MAX,"retry_interval":$RETRY_INTERVAL,"next_retry":$_nr,"daemon_pid":$_pid,"daemon_running":$_dr,"interval":$_iv,"ping_ok":$_po,"ping_ms":$_pm,"ping_host":"$(jesc "$PING_HOST")","net_check_method":"$(jesc "$NET_METHOD")","offline_kind":"$(jesc "$OFFLINE_KIND")","account_count":$ACCT_COUNT,"auto_switch":$AUTO_SWITCH,"accounts":"$(jesc "$ACCT_SUMMARY")","next_account":"$(jesc "$_ws_next")","last_account":"$(jesc "$_ws_last")"}
 EOF
 	mv -f "$STATUS_FILE.tmp" "$STATUS_FILE"
 }
@@ -511,6 +687,7 @@ daemon_main() {
 		# ---- 不在校园网 ----
 		if ! is_campus "$WANIP"; then
 			reset_fail
+			acct_reset
 			rm -f "$STATE_DIR/next_retry"
 			write_status nocampus "不在校园网（WAN $WANIP），待接入后自动重试" grey 0 0 "$CAMPUS_CHECK"
 			touch "$HEARTBEAT"
@@ -525,6 +702,7 @@ daemon_main() {
 
 		if [ "$_force" = "0" ] && is_online; then
 			reset_fail
+			acct_reset
 			rm -f "$STATE_DIR/next_retry"
 			write_status online "校园网在线（WAN $WANIP）" green 1 1 "$NET_CHECK"
 			touch "$HEARTBEAT"
@@ -548,11 +726,17 @@ daemon_main() {
 			nlog "手动触发登录（跳过在线判断，重连计数清零）"
 		fi
 
+		# 新一轮（包括开机后的第一次）→ 账号指针清空，从列表第一个开始。
+		# 这正是「首次尝试账号」语义的落点：cur_account 在 tmpfs 里，
+		# 重启必然消失，所以开机第一次一定是列表第一个账号。
+		[ "$_fc" -eq 0 ] && acct_reset
+
 		# 本轮次数已用尽 → 停手，等下一个常规周期
 		if [ "$_fc" -ge "$RETRY_MAX" ]; then
 			nlog "本轮已连续失败 $_fc 次（上限 ${RETRY_MAX}），停止重连；转入 ${NET_CHECK} 秒常规检测"
 			plog "放弃重连：连续 $_fc 次未成功"
 			reset_fail
+			acct_reset
 			rm -f "$STATE_DIR/next_retry"
 			write_status giveup "已连续尝试 $_fc 次仍未成功，停止重连；${NET_CHECK} 秒后再检测" red 1 0 "$NET_CHECK"
 			touch "$HEARTBEAT"
@@ -593,6 +777,7 @@ daemon_main() {
 			nlog "登录成功（本轮第 ${_n} 次尝试）：$LOGIN_MSG"
 			plog "登录成功（本轮第 ${_n} 次）：$LOGIN_MSG"
 			reset_fail
+			acct_reset
 			rm -f "$STATE_DIR/next_retry"
 			write_status online "已重新认证（$LOGIN_MSG）" green 1 1 "$NET_CHECK"
 			touch "$HEARTBEAT"
@@ -603,13 +788,18 @@ daemon_main() {
 
 		# ---- 本次失败 ----
 		printf '%s' "$_n" > "$FAIL_FILE"
-		nlog "登录失败（本轮第 ${_n}/${RETRY_MAX} 次）：$LOGIN_MSG"
+		nlog "登录失败（本轮第 ${_n}/${RETRY_MAX} 次，账号 ${ACCT_TXT}）：$LOGIN_MSG"
+
+		# 换下一个账号，供 RETRY_INTERVAL 秒后的下一次尝试使用。
+		# 放在写状态之前 —— 这样状态页上「下次使用」显示的就是真正要用的那个。
+		acct_advance
 
 		if [ "$_n" -ge "$RETRY_MAX" ]; then
 			# 第 RETRY_MAX 次也失败 → 直接进停手态，不必再空等一个间隔
 			nlog "本轮重连次数已用尽（${_n}/${RETRY_MAX}），停止重连；转入 ${NET_CHECK} 秒常规检测"
 			plog "放弃重连：连续 $_n 次未成功（末次：$LOGIN_MSG）"
 			reset_fail
+			acct_reset
 			rm -f "$STATE_DIR/next_retry"
 			write_status giveup "已连续尝试 $_n 次仍未成功（末次：$LOGIN_MSG），停止重连；${NET_CHECK} 秒后再检测" red 1 0 "$NET_CHECK"
 			touch "$HEARTBEAT"
@@ -618,7 +808,7 @@ daemon_main() {
 		else
 			plog "登录失败（本轮第 $_n/${RETRY_MAX} 次）：$LOGIN_MSG"
 			echo $(( $(date +%s) + RETRY_INTERVAL )) > "$STATE_DIR/next_retry"
-			write_status fail "登录失败（第 ${_n}/${RETRY_MAX} 次）：$LOGIN_MSG；${RETRY_INTERVAL} 秒后重试" red 1 0 "$RETRY_INTERVAL"
+			write_status fail "使用账号 ${ACCT_TXT} 登录失败（第 ${_n}/${RETRY_MAX} 次）：$LOGIN_MSG；${RETRY_INTERVAL} 秒后重试" red 1 0 "$RETRY_INTERVAL"
 			touch "$HEARTBEAT"
 			sleep_loop "$RETRY_INTERVAL"
 			PREV_INTERVAL=$RETRY_INTERVAL
@@ -743,17 +933,34 @@ check_main() {
 	printf 'net_check_method=%s  ping_host=%s  ping_timeout=%s\n' "$NET_METHOD" "$PING_HOST" "$PING_TIMEOUT"
 	printf 'login_paths=%s  login_min_interval=%s  persist_log=%s\n' \
 		"$LOGIN_PATHS" "$LOGIN_MIN" "$PERSIST_LOG_ON"
-	printf 'cardid=%s  password=%s\n' \
-		"$([ -n "$CARDID" ] && echo 已设置 || echo 未设置)" \
-		"$([ -n "$PASSWORD" ] && echo 已设置 || echo 未设置)"
+	printf 'auto_switch=%s  可用账号=%s 个\n' "$AUTO_SWITCH" "$ACCT_COUNT"
 
-	echo '=== 5. 重连轮次 ==='
+	echo '=== 5. 账号列表（顺序即认证顺序）==='
+	if [ "$ACCT_COUNT" -eq 0 ]; then
+		echo '  （没有可用账号：请在 LuCI「设置」页添加，或直接编辑 /etc/config/szu-netauth）'
+	else
+		_ck_cur=$(cat "$CUR_ACCT_FILE" 2>/dev/null)
+		_ck_i=0
+		for _ck_n in $ACCT_LIST; do
+			_ck_i=$((_ck_i + 1))
+			acct_load "$_ck_n"
+			_ck_tip=''
+			[ "$_ck_i" -eq 1 ] && _ck_tip='  ← 首次尝试'
+			[ "$_ck_n" = "$_ck_cur" ] && _ck_tip="$_ck_tip  ← 下次使用"
+			printf '  %d) %-14s 卡号 %-10s 密码 %s%s\n' \
+				"$_ck_i" "$(acct_display "$_ck_n")" "$(mask_id "$ACCT2_ID")" \
+				"$([ -n "$ACCT2_PW" ] && echo 已设置 || echo 未设置)" \
+				"$_ck_tip"
+		done
+	fi
+
+	echo '=== 6. 重连轮次 ==='
 	_now=$(date +%s)
 	_ll=$(cat "$LOGIN_TS_FILE" 2>/dev/null); [ -z "$_ll" ] && _ll=0
 	printf 'last_login=%s（%s 秒前）  本轮已失败=%s/%s 次\n' \
 		"$_ll" "$((_now - _ll))" "$(fail_count)" "$RETRY_MAX"
 
-	echo '=== 6. 守护进程 ==='
+	echo '=== 7. 守护进程 ==='
 	_pid=$(cat "$STATE_DIR/daemon.pid" 2>/dev/null)
 	if [ -n "$_pid" ] && kill -0 "$_pid" 2>/dev/null; then
 		echo "守护进程运行中（pid $_pid）"
@@ -770,7 +977,7 @@ status_main() {
 		_pid=$(cat "$STATE_DIR/daemon.pid" 2>/dev/null); [ -z "$_pid" ] && _pid=0
 		_dr=0
 		[ "$_pid" != "0" ] && kill -0 "$_pid" 2>/dev/null && _dr=1
-		printf '{"ts":%s,"time":"%s","state":"stopped","detail":"守护进程尚未写入状态（服务未运行或刚启动）","color":"grey","enabled":0,"campus":0,"online":0,"wan_ip":"","net_check":0,"campus_check":0,"login_paths":"","last_check":0,"last_login":0,"last_login_result":"","fail_count":0,"retry_max":0,"retry_interval":0,"next_retry":0,"daemon_pid":%s,"daemon_running":%s,"interval":0,"ping_ok":-1,"ping_ms":0,"ping_host":"","net_check_method":"","offline_kind":""}\n' \
+		printf '{"ts":%s,"time":"%s","state":"stopped","detail":"守护进程尚未写入状态（服务未运行或刚启动）","color":"grey","enabled":0,"campus":0,"online":0,"wan_ip":"","net_check":0,"campus_check":0,"login_paths":"","last_check":0,"last_login":0,"last_login_result":"","fail_count":0,"retry_max":0,"retry_interval":0,"next_retry":0,"daemon_pid":%s,"daemon_running":%s,"interval":0,"ping_ok":-1,"ping_ms":0,"ping_host":"","net_check_method":"","offline_kind":"","account_count":0,"auto_switch":0,"accounts":"","next_account":"","last_account":""}\n' \
 			"$(date +%s)" "$(date '+%Y-%m-%d %H:%M:%S')" "$_pid" "$_dr"
 	fi
 }

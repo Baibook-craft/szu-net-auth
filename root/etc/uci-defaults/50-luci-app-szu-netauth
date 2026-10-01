@@ -1,10 +1,13 @@
 #!/bin/sh
 # =============================================================================
-#  安装后 / 升级后的一次性初始化
+#  开机时 / 安装后的一次性初始化
 #
-#  这个脚本放在 /etc/uci-defaults/ 下，OpenWrt 在执行成功（exit 0）后会
-#  自动把它删掉；下次升级重新装包时又会回来再跑一遍 —— 正好是我们要的语义：
-#  「每次装上/升级完，都把 LuCI 的缓存刷新一次」。
+#  这个脚本放在 /etc/uci-defaults/ 下，OpenWrt 的 /etc/init.d/boot
+#  会在开机时逐个 source 执行，成功的会被删掉；下次升级重新装包时又会回来
+#  再跑一遍 —— 正好是我们要的语义：「过一遍就把该补的补上」。
+#
+#  ⚠ 它是被 `.`（source）执行的，不是 fork。所以这里的 `exit 0` 结束的是
+#    boot 里的那个子 shell，这是 OpenWrt 的约定写法，不要改。
 #
 #  注意：opkg 在 image builder / 离线刷机环境下会用 IPKG_INSTROOT 指向一个
 #  临时的根文件系统，那时绝不能去动宿主的 LuCI 缓存。
@@ -12,29 +15,69 @@
 
 [ -n "${IPKG_INSTROOT}" ] && exit 0
 
-# --- 1. 让 LuCI 重新扫描 menu.d / acl.d，菜单与权限立刻生效 ---
+# --- 1. 旧版单账号配置 → 账号列表（幂等迁移）------------------------------
+#
+# v1.0.x：卡号、密码放在  config szu-netauth 'global'  里
+# v1.1.0：改为独立的  config account '<段名>'  段，可以放任意多个账号
+#
+# 两个条件同时满足才迁，所以重复执行不会有副作用：
+#   a) global.cardid 非空                —— 确实存在旧配置
+#   b) 没有任何 account 段的 cardid 非空 —— 说明还没迁过
+#
+# 正常升级路径其实由 postinst 就迁好了，这里是**兜底**：万一 postinst 因为
+# 别的原因没跑成（或整包是刷进固件的），开机时补上。
+_netauth_migrate() {
+	_old_id="$(uci -q get szu-netauth.global.cardid)"
+	[ -n "$_old_id" ] || return 0
+
+	for _s in $(uci -q show szu-netauth 2>/dev/null \
+	           | sed -n 's/^szu-netauth\.\([^.=]*\)=account$/\1/p'); do
+		[ -n "$(uci -q get "szu-netauth.$_s.cardid")" ] && return 0
+	done
+
+	uci -q get szu-netauth.main >/dev/null 2>&1 || uci -q set szu-netauth.main=account
+	uci -q set szu-netauth.main.label='主号'
+	uci -q set szu-netauth.main.cardid="$_old_id"
+	uci -q set szu-netauth.main.password="$(uci -q get szu-netauth.global.password)"
+	uci -q set szu-netauth.main.enabled='1'
+	uci -q delete szu-netauth.global.cardid
+	uci -q delete szu-netauth.global.password
+	uci -q commit szu-netauth
+	logger -t szu-netauth "已把旧的单账号配置迁移为账号列表（账号名 main）；可在 LuCI 里继续添加账号"
+	return 0
+}
+_netauth_migrate
+
+# --- 2. 让 LuCI 重新扫描 menu.d / acl.d，菜单与权限立刻生效 ---------------
 rm -f  /tmp/luci-indexcache* 2>/dev/null
 rm -rf /tmp/luci-modulecache  2>/dev/null
 
 # rpcd 缓存了 ACL，必须重启它（reload 不重读 acl.d）
 /etc/init.d/rpcd reload 2>/dev/null
 
-# --- 2. 运行时目录（/var 是 tmpfs，重启即清空，所以每次都要建）---
+# --- 3. 运行时目录（/var 是 tmpfs，重启即清空，所以每次都要建）------------
 mkdir -p /var/run/szu-netauth
 
-# --- 3. 开机自启 ---
+# --- 4. 开机自启 -----------------------------------------------------------
 if [ -x /etc/init.d/szu-netauth ]; then
 	/etc/init.d/szu-netauth enable 2>/dev/null
 
-	# 只有用户已经填过卡号密码才直接拉起服务；
-	# 全新安装时留空，等用户在 LuCI 里填完再启动（避免无意义的登录尝试）。
-	_cardid="$(uci -q get szu-netauth.global.cardid)"
-	_password="$(uci -q get szu-netauth.global.password)"
-	if [ -n "$_cardid" ] && [ -n "$_password" ]; then
+	# 只有已经存在填好卡号的账号才直接拉起服务；
+	# 全新安装时是空的，等用户在 LuCI 里填完再启动（避免无意义的登录尝试）。
+	_netauth_account=''
+	for _s in $(uci -q show szu-netauth 2>/dev/null \
+	           | sed -n 's/^szu-netauth\.\([^.=]*\)=account$/\1/p'); do
+		if [ -n "$(uci -q get "szu-netauth.$_s.cardid")" ]; then
+			_netauth_account="$_s"
+			break
+		fi
+	done
+
+	if [ -n "$_netauth_account" ]; then
 		/etc/init.d/szu-netauth restart 2>/dev/null
-		logger -t szu-netauth "安装完成，已按现有配置启动自动认证服务"
+		logger -t szu-netauth "开机初始化完成，自动认证服务已启动（使用账号 $_netauth_account）"
 	else
-		logger -t szu-netauth "安装完成。请打开「服务 → 校园网认证」，填入卡号与密码后启动服务"
+		logger -t szu-netauth "开机初始化完成。请打开「服务 → 校园网认证」添加账号"
 	fi
 fi
 

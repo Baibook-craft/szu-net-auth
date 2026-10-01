@@ -57,7 +57,7 @@ from pathlib import Path
 SOURCE_DATE_EPOCH = 1767225600
 
 PKG_NAME = "luci-app-szu-netauth"
-DEFAULT_VERSION = "1.0.0"
+DEFAULT_VERSION = "1.1.0"
 DEFAULT_RELEASE = "1"
 DEFAULT_ARCH = "all"
 DEFAULT_SOURCE = "https://github.com/Baibook-craft/szu-net-auth"
@@ -73,8 +73,14 @@ TAR_FORMAT = tarfile.GNU_FORMAT
 # 显式决定，跨平台结果一致。
 EXEC_PREFIXES = ("etc/init.d/", "etc/uci-defaults/", "etc/rc.d/", "usr/bin/", "usr/sbin/")
 
+# 含明文口令、必须只让 root 读的配置。OpenWrt 自己的 /etc/config/network、
+# wireless 这类文件也都是 0600，这里对齐。
+SECRET_FILES = ("etc/config/szu-netauth",)
+
 
 def _file_mode(rel: str) -> int:
+    if rel in SECRET_FILES:
+        return 0o600
     if rel.startswith(EXEC_PREFIXES):
         return 0o755
     if rel.endswith(".sh"):
